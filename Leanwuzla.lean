@@ -32,25 +32,19 @@ where
   @[inline]
   push (str : String) : StateM String Unit := modify fun buf => buf ++ str
 
-  @[specialize]
-  withParens (arg : StateM String Unit) : StateM String Unit := do
-    push "("
-    arg
-    push ")"
-
   @[inline]
   pushUnaryOp (opName : String) (arg : StateM String Unit) : StateM String Unit := do
-    withParens do
-      push s!"{opName} "
+      push s!"({opName} "
       arg
+      push ")"
 
   @[inline]
   pushBinaryOp (opName : String) (lhs rhs : StateM String Unit) : StateM String Unit := do
-    withParens do
-      push s!"{opName} "
+      push s!"({opName} "
       lhs
       push " "
       rhs
+      push ")"
 
   go (expr : BVLogicalExpr) (atomsAssignment : Std.HashMap Nat (Nat × Expr)) : StateM String Unit := do
     push "(set-logic QF_BV)\n"
@@ -104,32 +98,17 @@ where
       push binStr
     | .extract start len expr => pushUnaryOp s!"(_ extract {len - 1 + start} {start})" (goBVExpr expr)
     | .bin lhs op rhs =>
-      let lhs := goBVExpr lhs
-      let rhs := goBVExpr rhs
-      match op with
-      | .and => pushBinaryOp "bvand" lhs rhs
-      | .or =>  pushBinaryOp "bvor" lhs rhs
-      | .xor => pushBinaryOp "bvxor" lhs rhs
-      | .add => pushBinaryOp "bvadd" lhs rhs
-      | .mul => pushBinaryOp "bvmul" lhs rhs
-      | .udiv =>
-        let zero := goBVExpr <| .const (w := w) 0
-        withParens do
-          push "ite "
-          pushBinaryOp "=" zero rhs
-          push " "
-          zero
-          push " "
-          pushBinaryOp "bvudiv" lhs rhs
-      | .umod =>
-        let zero := goBVExpr <| .const (w := w) 0
-        withParens do
-          push "ite "
-          pushBinaryOp "=" zero rhs
-          push " "
-          zero
-          push " "
-          pushBinaryOp "bvurem" lhs rhs
+      let opStr :=
+        match op with
+        | .and => "bvand"
+        | .or => "bvor"
+        | .xor => "bvxor"
+        | .add => "bvadd"
+        | .mul => "bvmul"
+        | .sdiv => "bvsdiv"
+        | .umod => "bvurem"
+        | .udiv => "bvudiv"
+      pushBinaryOp opStr (goBVExpr lhs) (goBVExpr rhs)
     | .un op operand =>
       match op with
       | .not => pushUnaryOp "bvnot" (goBVExpr operand)
@@ -198,9 +177,9 @@ def bitwuzla (reflectionResult : ReflectionResult) (atomsAssignment : Std.HashMa
 
 def bvBitwuzla (g : MVarId) (solverPath : System.FilePath) : MetaM Unit := do
   let some g ← Normalize.bvNormalize g | return ()
-  let unsatProver : UnsatProver := fun _ reflectionResult atomsAssignment => do
+  let unsatProver : UnsatProver := fun g reflectionResult atomsAssignment => do
     withTraceNode `bv (fun _ => return "Preparing LRAT reflection term") do
-      bitwuzla reflectionResult atomsAssignment solverPath
+      g.withContext <| bitwuzla reflectionResult atomsAssignment solverPath
   discard <| closeWithBVReflection g unsatProver
 
 
@@ -220,7 +199,6 @@ structure LeansatSuccessTimings where
   timeBitBlasting : Float
   timeSatSolving : Float
   timeLratTrimming : Float
-  timeLratChecking : Float
 
 structure LeansatFailureTimings where
   timeRewrite : Float
@@ -244,8 +222,8 @@ instance : ToString BitwuzlaPerf where
   toString := BitwuzlaPerf.toString
 
 def LeansatSuccessTimings.toString (timings : LeansatSuccessTimings) : String :=
-  let { timeRewrite, timeBitBlasting, timeSatSolving, timeLratTrimming, timeLratChecking } := timings
-  s!"rewriting {timeRewrite}ms, bitblasting {timeBitBlasting}ms, SAT solving {timeSatSolving}ms, LRAT trimming {timeLratTrimming}ms, LRAT checking {timeLratChecking}ms"
+  let { timeRewrite, timeBitBlasting, timeSatSolving, timeLratTrimming } := timings
+  s!"rewriting {timeRewrite}ms, bitblasting {timeBitBlasting}ms, SAT solving {timeSatSolving}ms, LRAT processing {timeLratTrimming}ms"
 
 instance : ToString LeansatSuccessTimings where
   toString := LeansatSuccessTimings.toString
@@ -282,7 +260,6 @@ partial def parseSuccessTrace (traces : PersistentArray TraceElem) : IO LeansatS
     timeBitBlasting := 0,
     timeSatSolving := 0,
     timeLratTrimming := 0,
-    timeLratChecking := 0,
   }
   return time
 where
@@ -300,8 +277,6 @@ where
           modify fun s => { s with timeSatSolving := TraceData.durationMs data }
         | "Obtaining LRAT certificate" =>
           modify fun s => { s with timeLratTrimming := TraceData.durationMs data }
-        | "Verifying LRAT certificate" =>
-          modify fun s => { s with timeLratChecking := TraceData.durationMs data }
         | _ => pure ()
         go children
       | .withContext _ msg => go #[msg]
