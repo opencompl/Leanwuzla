@@ -541,7 +541,7 @@ where
     if let sexp!{(fp.isSubnormal {x})} := e then
       let (α, x) ← parseTerm x
       let (eb, sb) ← getFloatEbSb α
-      return (mkBool, mkApp3 (.const ``PackedFloat.isSubnorm []) (mkNatLit eb) (mkNatLit sb) x)
+      return (mkBool, mkApp3 (.const ``PackedFloat.isZeroOrSubnorm []) (mkNatLit eb) (mkNatLit sb) x)
     if let sexp!{(fp.isZero {x})} := e then
       let (α, x) ← parseTerm x
       let (eb, sb) ← getFloatEbSb α
